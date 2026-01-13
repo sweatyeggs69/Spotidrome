@@ -21,16 +21,15 @@ GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-preview-09-2025")
 
 # --- System Instruction ---
-# Modify this string directly to change the behavior of the AI curator.
 SYSTEM_INSTRUCTION = """
 You are Spotidrome, an expert music curator. Your goal is to generate a 'Daily Mix' JSON for the user.
 
 Logic:
-1. Review the 'recent_favorites' (songs from your most frequently played albums lately).
-2. You will be told the 'top_artist_recently'. Use this as the primary anchor for the "vibe" of today's mix.
+1. Review the 'recent_favorites' (this includes both individual tracks recently played and songs from frequent albums).
+2. You will be told the 'top_artist_recently'. Use this as the primary anchor for the "vibe".
 3. Select 40-45 song IDs from the 'recent_favorites' list to form the core of the mix. 
 4. IMPORTANT: Shuffle these IDs so the playlist isn't grouped by artist or album.
-5. Select 5-10 songs from 'library_samples' for discovery that fit the established vibe of your recent listening.
+5. Select 5-10 songs from 'library_samples' for discovery that fit the established vibe.
 6. Total song count MUST NOT exceed 50.
 
 OUTPUT FORMAT (Strict JSON only):
@@ -54,7 +53,6 @@ def check_env():
         print(f"[{datetime.now()}] WARNING: No Gemini API Key. Using Algorithmic Fallback.")
     else:
         print(f"[{datetime.now()}] Configured with model: {GEMINI_MODEL}")
-        print(f"[{datetime.now()}] Using internal System Instruction for curation logic.")
 
 def get_auth_params():
     salt = "".join([random.choice("0123456789abcdef") for _ in range(10)])
@@ -76,13 +74,27 @@ def call_subsonic(endpoint, extra_params={}):
 def fetch_music_data():
     print(f"[{datetime.now()}] Fetching music data from Navidrome...")
     
-    # Use 'frequent' albums to find Top Artist and Recent Favorites
-    frequent_albums_data = call_subsonic("getAlbumList", {"type": "frequent", "size": 60})
-    albums = frequent_albums_data.get("albumList", {}).get("album", [])
-    if not isinstance(albums, list): albums = [albums] if albums else []
-    
     artist_counts = {}
     recent_favorites = []
+    seen_song_ids = set()
+
+    # 1. Fetch Recently Played Tracks (Individual songs)
+    # This is key for users who play tracks one-by-one
+    recent_tracks_data = call_subsonic("getRecentlyPlayed", {"size": 50})
+    recent_tracks = recent_tracks_data.get("recentlyPlayed", {}).get("song", [])
+    if not isinstance(recent_tracks, list): recent_tracks = [recent_tracks] if recent_tracks else []
+    
+    for track in recent_tracks:
+        a_name = track.get('artist')
+        if a_name: artist_counts[a_name] = artist_counts.get(a_name, 0) + 2 # Weighted higher for individual play
+        if track['id'] not in seen_song_ids:
+            recent_favorites.append(track)
+            seen_song_ids.add(track['id'])
+
+    # 2. Fetch Frequent Albums (Contextual heavy rotation)
+    frequent_albums_data = call_subsonic("getAlbumList", {"type": "frequent", "size": 40})
+    albums = frequent_albums_data.get("albumList", {}).get("album", [])
+    if not isinstance(albums, list): albums = [albums] if albums else []
     
     for album in albums:
         a_name = album.get('artist')
@@ -91,16 +103,18 @@ def fetch_music_data():
         album_data = call_subsonic("getAlbum", {"id": album['id']})
         album_tracks = album_data.get("album", {}).get("song", [])
         if album_tracks:
-            # Take a healthy sample from recently frequent albums
-            sample_count = random.randint(3, 6)
-            recent_favorites.extend(random.sample(album_tracks, min(len(album_tracks), sample_count)))
+            # Add a small sample from frequent albums to the pool
+            sample = random.sample(album_tracks, min(len(album_tracks), 3))
+            for s in sample:
+                if s['id'] not in seen_song_ids:
+                    recent_favorites.append(s)
+                    seen_song_ids.add(s['id'])
     
     top_artist = max(artist_counts, key=artist_counts.get) if artist_counts else "Unknown"
-    print(f"[{datetime.now()}] Top artist from recent history: {top_artist}")
+    print(f"[{datetime.now()}] Top artist from recent history (including individual tracks): {top_artist}")
 
-    # Starred data removed to focus on recent frequency
-
-    discovery_data = call_subsonic("getRandomSongs", {"size": 200})
+    # 3. Fetch Discovery pool
+    discovery_data = call_subsonic("getRandomSongs", {"size": 150})
     discovery = discovery_data.get("randomSongs", {}).get("song", [])
     if not isinstance(discovery, list): discovery = [discovery] if discovery else []
 
@@ -111,9 +125,7 @@ def fetch_music_data():
     }
 
 def get_ai_curation(data):
-    """Attempts Gemini curation using the hardcoded SYSTEM_INSTRUCTION."""
     if not GEMINI_KEY:
-        # Simple shuffle fallback
         all_ids = [s['id'] for s in (data['history'] + data['discovery'][:10])]
         random.shuffle(all_ids)
         return {"ids": all_ids[:50]}
@@ -150,10 +162,10 @@ def update_daily_mix_playlist(song_ids):
     params = get_auth_params()
     
     if target_id:
-        print(f"[{datetime.now()}] Updating tracks in existing '{playlist_name}' (ID: {target_id})...")
+        print(f"[{datetime.now()}] Updating '{playlist_name}' (ID: {target_id})...")
         params.update({"playlistId": target_id})
     else:
-        print(f"[{datetime.now()}] '{playlist_name}' not found. Creating new...")
+        print(f"[{datetime.now()}] Creating '{playlist_name}'...")
         params.update({"name": playlist_name})
     
     params.update({"comment": f"Updated {datetime.now().strftime('%Y-%m-%d %H:%M')}"})
@@ -161,7 +173,7 @@ def update_daily_mix_playlist(song_ids):
     song_str = "&".join([f"songId={sid}" for sid in song_ids[:50]])
     
     requests.get(f"{URL}/rest/createPlaylist.view?{auth_str}&{song_str}")
-    print(f"[{datetime.now()}] Successfully updated '{playlist_name}'.")
+    print(f"[{datetime.now()}] Playlist updated.")
 
 def job():
     print(f"[{datetime.now()}] --- Starting Refresh Job ---")
@@ -169,8 +181,6 @@ def job():
     curation = get_ai_curation(data)
     if curation and "ids" in curation:
         update_daily_mix_playlist(curation['ids'])
-    else:
-        print(f"[{datetime.now()}] Refresh job completed with no updates.")
 
 def main():
     check_env()
