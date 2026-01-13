@@ -18,6 +18,7 @@ URL = os.getenv("NAVIDROME_URL")
 USER = os.getenv("NAVIDROME_USER")
 PASS = os.getenv("NAVIDROME_PASS")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+# Default to preview, but allow override from env
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-preview-09-2025")
 
 # Baked-in System Instructions
@@ -78,13 +79,14 @@ def call_subsonic(endpoint, extra_params={}):
 def fetch_music_data():
     print(f"[{datetime.now()}] Fetching music data from Navidrome...")
     
-    # 1. Identify top artist from recent history (last 7 days of plays)
-    top_songs_data = call_subsonic("getTopSongs", {"type": "lastWeek"})
-    top_songs = top_songs_data.get("topSongs", {}).get("song", [])
-    if not isinstance(top_songs, list): top_songs = [top_songs] if top_songs else []
+    # 1. Identify top artist from "Most Played" instead of "Top Songs" to avoid missing parameter errors
+    # Most Played usually reflects the user's current rotation better than a global top list
+    top_played_data = call_subsonic("getMostPlayedSongs", {"size": 50})
+    top_played = top_played_data.get("mostPlayedSongs", {}).get("song", [])
+    if not isinstance(top_played, list): top_played = [top_played] if top_played else []
     
     artist_counts = {}
-    for s in top_songs[:50]:
+    for s in top_played:
         a = s.get('artist')
         if a: artist_counts[a] = artist_counts.get(a, 0) + 1
     
@@ -100,6 +102,7 @@ def fetch_music_data():
         album_data = call_subsonic("getAlbum", {"id": album['id']})
         album_tracks = album_data.get("album", {}).get("song", [])
         if album_tracks:
+            # Take a healthy sample from frequently played albums
             sample_count = random.randint(2, 5)
             recent_favorites.extend(random.sample(album_tracks, min(len(album_tracks), sample_count)))
     
@@ -191,11 +194,9 @@ def update_daily_mix_playlist(song_ids):
     params = get_auth_params()
     
     if target_id:
-        # Replacing tracks in existing playlistId overwrites contents in Subsonic
         print(f"[{datetime.now()}] Replacing tracks in existing '{playlist_name}' (ID: {target_id})...")
         params.update({"playlistId": target_id})
     else:
-        # Create new if it doesn't exist
         print(f"[{datetime.now()}] '{playlist_name}' not found. Creating new...")
         params.update({"name": playlist_name})
     
