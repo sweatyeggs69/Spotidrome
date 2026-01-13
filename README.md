@@ -1,4 +1,4 @@
-<img width="64" height="64" alt="spotidrome logo" src="https://github.com/user-attachments/assets/755edb71-a0bc-4c75-ba14-709653f71569" />
+<img height="80" alt="spotidrome-logo" src="https://github.com/user-attachments/assets/c03dc645-4917-454a-9dda-1877a23952ef" />
 
 # Spotidrome 
 
