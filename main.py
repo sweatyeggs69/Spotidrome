@@ -26,9 +26,10 @@ You are Spotidrome, an expert music curator. Your goal is to generate a 'Daily M
 
 Logic:
 1. Review the 'recent_favorites' (frequently played) and 'starred_gems' (explicitly loved).
-2. Select 65-70 song IDs from these two lists to form the core of the mix. 
+2. Select 40-45 song IDs from these two lists to form the core of the mix. 
 3. IMPORTANT: Shuffle these IDs so the playlist doesn't just group songs by the same artist or album together.
 4. Select 5-10 songs from 'library_samples' that complement the vibe of the favorites to act as "discovery" tracks.
+5. Total song count MUST NOT exceed 50.
 
 OUTPUT FORMAT (Strict JSON only):
 {
@@ -102,7 +103,7 @@ def fetch_music_data():
     }
 
 def algorithmic_fallback(data):
-    """Generates a 75-track mix using local shuffling logic."""
+    """Generates a 50-track mix using local shuffling logic."""
     print(f"[{datetime.now()}] Running local Algorithmic Curation...")
     
     all_favorites = data['history'] + data['starred']
@@ -111,7 +112,8 @@ def algorithmic_fallback(data):
     random.shuffle(all_favorites)
     random.shuffle(discovery_pool)
     
-    fav_selection = all_favorites[:68]
+    # 43 Favorites + 7 Discoveries = 50 Total
+    fav_selection = all_favorites[:43]
     disc_selection = discovery_pool[:7]
     
     final_pool = fav_selection + disc_selection
@@ -167,63 +169,39 @@ def get_ai_curation(data):
     return algorithmic_fallback(data)
 
 def update_daily_mix_playlist(song_ids):
-    """Updates Navidrome playlist named 'Daily Mix' with full replacement logic."""
+    """Updates Navidrome playlist named 'Daily Mix' by deleting and recreating it."""
     playlist_name = "Daily Mix"
-    final_song_list = song_ids[:75]
+    # Hard limit to 50 songs
+    final_song_list = song_ids[:50]
     
+    # 1. Check if it exists
     playlists_data = call_subsonic("getPlaylists")
     playlists = playlists_data.get("playlists", {}).get("playlist", [])
     if not isinstance(playlists, list): playlists = [playlists] if playlists else []
     
     target_id = next((p['id'] for p in playlists if p.get('name') == playlist_name), None)
     
+    # 2. Delete it if it exists (Atomic way to clear all tracks)
     if target_id:
-        print(f"[{datetime.now()}] Found existing '{playlist_name}'. Clearing and updating...")
-        # Update comment to reflect curation source
-        comment_text = "AI Curated Mix" if GEMINI_KEY else "Algorithmically Curated Mix"
-        call_subsonic("updatePlaylist", {
-            "playlistId": target_id, 
-            "comment": comment_text
-        })
-        
-        # --- ROBUST CLEARING LOGIC ---
-        # Fetch current tracks to get the exact count
-        playlist_detail = call_subsonic("getPlaylist", {"id": target_id})
-        songs = playlist_detail.get("playlist", {}).get("song", [])
-        if not isinstance(songs, list): songs = [songs] if songs else []
-        
-        if songs:
-            # Send the indices to remove. We reverse the indices so that 
-            # removing an item doesn't shift the index of the next item we want to remove.
-            # E.g., removing index 5, then index 4, then index 3...
-            indices_to_remove = ",".join([str(i) for i in range(len(songs))])
-            call_subsonic("removeFromPlaylist", {
-                "id": target_id, 
-                "index": indices_to_remove
-            })
-            print(f"[{datetime.now()}] Sent request to remove {len(songs)} tracks.")
+        print(f"[{datetime.now()}] Deleting existing '{playlist_name}' to ensure a fresh start...")
+        call_subsonic("deletePlaylist", {"id": target_id})
+        time.sleep(1)
 
-        # --- ADD NEW SONGS ---
-        # We use songIdToAdd (plural) in updatePlaylist for bulk adding
-        params = get_auth_params()
-        params.update({"playlistId": target_id})
-        auth_str = "&".join([f"{k}={v}" for k, v in params.items()])
-        song_str = "&".join([f"songIdToAdd={sid}" for sid in final_song_list])
-        
-        # Build the full URL manually to handle the multiple songIdToAdd keys correctly
-        update_url = f"{URL}/rest/updatePlaylist.view?{auth_str}&{song_str}"
-        requests.get(update_url)
-        
-    else:
-        # Create fresh
-        print(f"[{datetime.now()}] Creating new '{playlist_name}'...")
-        params = get_auth_params()
-        params.update({"name": playlist_name})
-        auth_str = "&".join([f"{k}={v}" for k, v in params.items()])
-        song_str = "&".join([f"songId={sid}" for sid in final_song_list])
-        requests.get(f"{URL}/rest/createPlaylist.view?{auth_str}&{song_str}")
+    # 3. Create fresh
+    print(f"[{datetime.now()}] Creating fresh '{playlist_name}' with {len(final_song_list)} tracks...")
+    params = get_auth_params()
+    params.update({"name": playlist_name})
+    
+    comment_text = "AI Curated Mix" if GEMINI_KEY else "Algorithmically Curated Mix"
+    params.update({"comment": comment_text})
+    
+    auth_str = "&".join([f"{k}={v}" for k, v in params.items()])
+    song_str = "&".join([f"songId={sid}" for sid in final_song_list])
+    
+    create_url = f"{URL}/rest/createPlaylist.view?{auth_str}&{song_str}"
+    requests.get(create_url)
 
-    print(f"[{datetime.now()}] Successfully updated '{playlist_name}' with {len(final_song_list)} tracks.")
+    print(f"[{datetime.now()}] Successfully refreshed '{playlist_name}'.")
 
 def job():
     print(f"[{datetime.now()}] --- Starting Refresh Job ---")
