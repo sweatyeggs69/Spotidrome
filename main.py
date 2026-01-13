@@ -169,9 +169,8 @@ def get_ai_curation(data):
     return algorithmic_fallback(data)
 
 def update_daily_mix_playlist(song_ids):
-    """Updates Navidrome playlist named 'Daily Mix' by deleting and recreating it."""
+    """Updates Navidrome playlist by overwriting its contents."""
     playlist_name = "Daily Mix"
-    # Hard limit to 50 songs
     final_song_list = song_ids[:50]
     
     # 1. Check if it exists
@@ -181,16 +180,16 @@ def update_daily_mix_playlist(song_ids):
     
     target_id = next((p['id'] for p in playlists if p.get('name') == playlist_name), None)
     
-    # 2. Delete it if it exists (Atomic way to clear all tracks)
-    if target_id:
-        print(f"[{datetime.now()}] Deleting existing '{playlist_name}' to ensure a fresh start...")
-        call_subsonic("deletePlaylist", {"id": target_id})
-        time.sleep(1)
-
-    # 3. Create fresh
-    print(f"[{datetime.now()}] Creating fresh '{playlist_name}' with {len(final_song_list)} tracks...")
     params = get_auth_params()
-    params.update({"name": playlist_name})
+    
+    if target_id:
+        # Use existing playlistId to overwrite contents
+        print(f"[{datetime.now()}] Replacing tracks in existing '{playlist_name}' (ID: {target_id})...")
+        params.update({"playlistId": target_id})
+    else:
+        # Create new if it doesn't exist
+        print(f"[{datetime.now()}] '{playlist_name}' not found. Creating new...")
+        params.update({"name": playlist_name})
     
     comment_text = "AI Curated Mix" if GEMINI_KEY else "Algorithmically Curated Mix"
     params.update({"comment": comment_text})
@@ -198,10 +197,11 @@ def update_daily_mix_playlist(song_ids):
     auth_str = "&".join([f"{k}={v}" for k, v in params.items()])
     song_str = "&".join([f"songId={sid}" for sid in final_song_list])
     
-    create_url = f"{URL}/rest/createPlaylist.view?{auth_str}&{song_str}"
-    requests.get(create_url)
+    # Calling createPlaylist with playlistId overwrites the list
+    update_url = f"{URL}/rest/createPlaylist.view?{auth_str}&{song_str}"
+    requests.get(update_url)
 
-    print(f"[{datetime.now()}] Successfully refreshed '{playlist_name}'.")
+    print(f"[{datetime.now()}] Successfully updated '{playlist_name}'.")
 
 def job():
     print(f"[{datetime.now()}] --- Starting Refresh Job ---")
