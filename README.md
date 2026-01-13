@@ -1,8 +1,22 @@
 # Spotidrome
 
-Spotidrome is an optionally AI-powered playlist generator for Navidrome (and other Subsonic-compatible servers). It analyzes your listening history, favorites, and library to curate a "Daily Mix".
+Spotidrome is a playlist generator for Navidrome (and other Subsonic-compatible servers), with optional Google Gemini integration. It analyzes your listening history, favorites and library to curate a "Daily Mix" playlist.
 
 ### Prerequisites
 
 - A Navidrome server instance.
 - A Google Gemini API Key (Get one for free at Google AI Studio).
+
+## Docker Setup
+```yaml
+services:
+     Spotidrome:
+       image: sweatyeggs69/spotidrome:latest
+       container_name: spotidrome
+       environment:
+         - NAVIDROME_URL=http://navidrome:4533
+         - NAVIDROME_USER=your_username
+         - NAVIDROME_PASS=your_password
+         - GEMINI_API_KEY=your_gemini_api_key #optional
+         - GEMINI_MODEL=gemini-2.5-flash-lite #optional
+       restart: unless-stopped
