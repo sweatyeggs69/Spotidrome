@@ -3,6 +3,10 @@ name: Build and Push Spotidrome
 on:
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - 'README.md'
+      - 'LICENSE'
+      - '.gitignore'
 
 jobs:
   deploy:
