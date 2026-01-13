@@ -28,20 +28,19 @@ services:
 ```
 
 ## How It Works
-### With AI Integration (Gemini Active)
+### With Gemini Active
 #### When a Gemini API key is provided, the script acts as an intelligent music curator:
-- Contextual Analysis: The script sends a "snapshot" of your library to Gemini, including your most frequent albums, starred tracks, and a random sample of your library.
-- Intelligent Selection: Gemini analyzes the genres, artists, and "vibe" of your favorites. It then picks a cohesive set of tracks that match your taste while deliberately selecting a few "discovery" songs from the library samples.
-- Human-like Shuffling: The AI is instructed to shuffle the results so the playlist feels like a professionally curated radio mix rather than just a list of songs sorted by artist or date.
+- Dynamic Context: The script analyzes your frequent albums (the 60 albums you've played most often lately) to identify your current musical "vibe."
+- Top Artist Anchor: It calculates your most-played artist from recent history and uses them as a primary anchor for the day's curation.
+- Intelligent Selection: Gemini reviews a pool of ~150 songs from your recent favorites and ~100 random samples from your library to build a cohesive 50-track mix.
+- Human-like Shuffling: The AI is instructed to shuffle tracks to ensure the mix feels like a hand-crafted radio station rather than a sorted list.
 
-### Without AI Integration (Algorithmic Fallback)
-#### If the API key is missing or the AI service is unreachable, the script switches to a local, rules-based logic:
-- Weighted Randomization: It combines your recently played tracks and starred tracks into a "Favorites Pool."
-- Fixed Ratio: It strictly follows a mathematical ratio: 43 songs are pulled randomly from your favorites, and 7 songs are pulled from the rest of your library for discovery.
-- Basic Shuffle: It performs a standard random shuffle on the final 50 tracks to ensure variety.
-- Reliability: This mode requires zero external internet access (other than your Navidrome server), ensuring your "Daily Mix" is updated even if the AI service is down.
+### Without Gemini (Algorithmic Fallback)
+#### If the API key is not provided or the AI service is unreachable, the script switches to local logic:
+- Weighted Selection: It pulls tracks randomly from your recently frequent albums.
+- Discovery Blend: It fills the remaining slots with random tracks from your library to maintain a roughly 80/20 split between favorites and discovery.
+- Basic Shuffle: It performs a standard random shuffle on the final 50 tracks.
 
-### The "Update" Process (Same for both)
-#### Regardless of whether AI is used, the final step is the same:
+## The "Update" Process
 - Playlist Discovery: The script looks for a playlist named "Daily Mix" in your Navidrome account.
-- Atomic Update: It uses the playlistId to overwrite the contents. This means you don't have to "re-follow" the playlist on your phone or computer; the songs simply change inside the existing playlist container every night at midnight.
+- Atomic Update: It overwrites the contents of the existing playlist daily. This means you don't have to "re-follow" the playlist; the music just refreshes every night at midnight.
