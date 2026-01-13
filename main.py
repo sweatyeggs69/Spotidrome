@@ -51,7 +51,7 @@ def call_subsonic(endpoint, extra_params={}):
         return {}
 
 def fetch_music_data():
-    log("Step 1: Scanning Navidrome for recent activity...")
+    log("Importing Navidrome recent activity...")
     
     artist_counts = {}
     recent_pool = []
@@ -74,7 +74,6 @@ def fetch_music_data():
                 recent_pool.append(t)
                 seen_ids.add(t['id'])
 
-    # Frequent Albums
     frequent_data = call_subsonic("getAlbumList", {"type": "frequent", "size": 20})
     f_albums = frequent_data.get("albumList", {}).get("album", [])
     if not isinstance(f_albums, list): f_albums = [f_albums] if f_albums else []
@@ -85,7 +84,6 @@ def fetch_music_data():
     
     top_artist = max(artist_counts, key=artist_counts.get) if artist_counts else "Various"
     
-    # Discovery Pool
     discovery_data = call_subsonic("getRandomSongs", {"size": 100})
     discovery = discovery_data.get("randomSongs", {}).get("song", [])
 
@@ -106,7 +104,7 @@ def get_mix(data):
         final_ids.extend(random.sample(discovery_ids, min(len(discovery_ids), 8)))
         return {"ids": final_ids}
 
-    log(f"Step 2: Requesting curation from Gemini ({GEMINI_MODEL})...")
+    log(f"Sending data to Gemini for curation...")
     client = genai.Client(api_key=GEMINI_KEY)
     
     context = {
@@ -138,7 +136,7 @@ def get_mix(data):
             return get_mix({**data, "GEMINI_KEY": None})
 
 def update_playlist(song_ids):
-    log("Step 3: Syncing playlist with Navidrome...")
+    log("Syncing new playlist to Navidrome...")
     playlist_name = "Daily Mix"
     
     lists = call_subsonic("getPlaylists").get("playlists", {}).get("playlist", [])
@@ -156,15 +154,15 @@ def update_playlist(song_ids):
     song_str = "&".join([f"songId={sid}" for sid in song_ids[:50]])
     
     requests.get(f"{URL}/rest/createPlaylist.view?{auth_str}&{song_str}")
-    log(f"Playlist '{playlist_name}' update complete.")
+    log(f"{playlist_name} update complete.")
 
 def job():
-    log("--- Daily Mix Update Started ---")
+    log("Daily Mix Update Started")
     data = fetch_music_data()
     mix = get_mix(data)
     if mix and "ids" in mix:
         update_playlist(mix['ids'])
-    log("--- Update Cycle Complete ---")
+    log("Update Cycle Complete")
 
 if __name__ == "__main__":
     log("Spotidrome Service Initialized")
