@@ -78,18 +78,25 @@ def fetch_music_data():
     recent_favorites = []
     seen_song_ids = set()
 
-    # 1. Fetch Recently Played Tracks (Individual songs)
-    # This is key for users who play tracks one-by-one
-    recent_tracks_data = call_subsonic("getRecentlyPlayed", {"size": 50})
-    recent_tracks = recent_tracks_data.get("recentlyPlayed", {}).get("song", [])
-    if not isinstance(recent_tracks, list): recent_tracks = [recent_tracks] if recent_tracks else []
+    # 1. Fetch Recently Played/Added via getAlbumList (type: recent)
+    # This replaces getRecentlyPlayed which caused a 404.
+    # We fetch the tracks from these albums to see what the user has been active with.
+    recent_activity_data = call_subsonic("getAlbumList", {"type": "recent", "size": 30})
+    recent_albums = recent_activity_data.get("albumList", {}).get("album", [])
+    if not isinstance(recent_albums, list): recent_albums = [recent_albums] if recent_albums else []
     
-    for track in recent_tracks:
-        a_name = track.get('artist')
-        if a_name: artist_counts[a_name] = artist_counts.get(a_name, 0) + 2 # Weighted higher for individual play
-        if track['id'] not in seen_song_ids:
-            recent_favorites.append(track)
-            seen_song_ids.add(track['id'])
+    for album in recent_albums:
+        a_name = album.get('artist')
+        if a_name: artist_counts[a_name] = artist_counts.get(a_name, 0) + 2 # Individual history is weighted higher
+        
+        album_data = call_subsonic("getAlbum", {"id": album['id']})
+        album_tracks = album_data.get("album", {}).get("song", [])
+        if album_tracks:
+            # Add these tracks to the favorites pool
+            for s in album_tracks:
+                if s['id'] not in seen_song_ids:
+                    recent_favorites.append(s)
+                    seen_song_ids.add(s['id'])
 
     # 2. Fetch Frequent Albums (Contextual heavy rotation)
     frequent_albums_data = call_subsonic("getAlbumList", {"type": "frequent", "size": 40})
@@ -104,14 +111,15 @@ def fetch_music_data():
         album_tracks = album_data.get("album", {}).get("song", [])
         if album_tracks:
             # Add a small sample from frequent albums to the pool
-            sample = random.sample(album_tracks, min(len(album_tracks), 3))
+            sample_count = min(len(album_tracks), 3)
+            sample = random.sample(album_tracks, sample_count)
             for s in sample:
                 if s['id'] not in seen_song_ids:
                     recent_favorites.append(s)
                     seen_song_ids.add(s['id'])
     
     top_artist = max(artist_counts, key=artist_counts.get) if artist_counts else "Unknown"
-    print(f"[{datetime.now()}] Top artist from recent history (including individual tracks): {top_artist}")
+    print(f"[{datetime.now()}] Top artist from recent history: {top_artist}")
 
     # 3. Fetch Discovery pool
     discovery_data = call_subsonic("getRandomSongs", {"size": 150})
