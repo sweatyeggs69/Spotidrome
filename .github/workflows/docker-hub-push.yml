@@ -2,7 +2,9 @@ name: Build and Push Spotidrome
 
 on:
   push:
-    branches: [ "main" ]
+    branches: 
+      - main
+      - beta
     paths-ignore:
       - 'README.md'
       - 'LICENSE'
@@ -21,10 +23,19 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Determine Tag
+        id: vars
+        run: |
+          if [ "${{ github.ref_name }}" == "main" ]; then
+            echo "tag=latest" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build and Push
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: true
-          tags: sweatyeggs69/spotidrome:latest
+          tags: sweatyeggs69/spotidrome:${{ steps.vars.outputs.tag }}
