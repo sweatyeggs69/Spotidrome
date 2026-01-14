@@ -23,7 +23,7 @@ services:
          - NAVIDROME_USER=your_username
          - NAVIDROME_PASS=your_password
        # - GEMINI_API_KEY=your_gemini_api_key #optional
-       # - GEMINI_MODEL=gemini-2.5-flash-lite #optional
+       # - GEMINI_MODEL=desired-gemini-model #optional, default behavior uses the lite-preview model
        restart: unless-stopped
 ```
 
