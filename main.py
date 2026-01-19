@@ -28,6 +28,7 @@ Logic:
 - Select ~10 tracks from 'library_samples' for discovery.
 - Total tracks must be exactly 50.
 - Shuffle the list so it feels like a curated radio station.
+- Ensure we are staying within similar genres to the anchor artist.
 OUTPUT: {"ids": ["id1", "id2", ...]}
 """
 
