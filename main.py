@@ -29,13 +29,14 @@ You are Spotidrome, a professional music curator. You generate personalized musi
 TASK 1: Daily Mix
 - Anchor around 'top_artist_recently'.
 - 50 tracks total (40 recent, 10 discovery).
+- VARIETY RULE: Strictly limit tracks to a maximum of 2 per album. DO NOT add entire albums.
 - Output key: "daily_mix" (list of IDs).
 
 TASK 2: daylist
 - Create a hyper-personalized mix based on the user's current 'vibe' and time of day.
-- Naming: Generate a hyper-specific, all-lowercase title (NO "daylist" prefix).
+- Naming: Generate a short, hyper-specific, all-lowercase title (e.g. "rainy window espresso" or "neon night drive"). 
 - Selection: Pick 50 tracks that fit this specific generated vibe.
-- VARIETY RULE: Do NOT include more than 2 tracks from the same album. Avoid adding entire albums.
+- VARIETY RULE: Strictly limit tracks to a maximum of 2 per album. This must be a mix of individual songs from different sources, NOT a sequence of album tracks.
 - Output keys: "daylist_name" (string) and "daylist_ids" (list of IDs).
 
 CRITICAL: Return ONLY valid JSON.
@@ -92,7 +93,6 @@ def fetch_music_data():
         if not isinstance(tracks, list): tracks = [tracks] if tracks else []
         for t in tracks:
             if t['id'] not in seen_ids:
-                # Include album name so AI can see the variety rule
                 recent_pool.append({
                     "id": t['id'], 
                     "t": t.get('title'), 
@@ -126,7 +126,7 @@ def get_curated_content(data):
     context = {
         "top_artist_recently": data['top_artist'],
         "time_context": data['current_time'],
-        "recent_pool": data['recent_pool'][:150],
+        "recent_pool": data['recent_pool'][:200], # Send more tracks so it has variety to choose from
         "library_samples": [{"id": s['id'], "t": s.get('title'), "a": s.get('artist'), "alb": s.get('album')} for s in data['discovery'][:100]]
     }
 
@@ -147,8 +147,8 @@ def get_curated_content(data):
 def update_playlist(target_type, display_name, song_ids):
     if not song_ids: return
     
-    # Clean duplicates from the AI response just in case
-    song_ids = list(dict.fromkeys(song_ids))
+    # Clean duplicates and limit to 50
+    song_ids = list(dict.fromkeys(song_ids))[:50]
     
     state = load_playlist_map()
     all_playlists = call_subsonic("getPlaylists").get("playlists", {}).get("playlist", [])
@@ -160,40 +160,46 @@ def update_playlist(target_type, display_name, song_ids):
         target_id = next((p['id'] for p in all_playlists if p.get('name') == "Daily Mix"), None)
         final_name = "Daily Mix"
     else:
-        # 1. Try mapping file
-        target_id = state.get("daylist_id")
+        # Check mapping file first
+        stored_id = state.get("daylist_id")
+        # Verify the playlist still actually exists in Navidrome
+        if stored_id and any(p['id'] == stored_id for p in all_playlists):
+            target_id = stored_id
+        else:
+            # Fallback: find any playlist with a non-standard name that might be an old daylist
+            # Or just create a new one if we're totally lost
+            target_id = None
         
-        # 2. Safety: If mapping is lost, look for any playlist that ISN'T "Daily Mix" but was owned by us
-        # Since daylist names are random, we look for our stored ID first
-        exists = any(p['id'] == target_id for p in all_playlists) if target_id else False
-        
-        if not exists:
-            target_id = None # Force creation if ID is invalid
-
         final_name = display_name
 
     params = get_auth_params()
     
     if target_id:
+        # Use updatePlaylist to rename and replace content in ONE call
         params.update({"playlistId": target_id, "name": final_name})
         log(f"Updating {target_type} (ID: {target_id}) -> '{final_name}'")
+        
+        # In Subsonic API, createPlaylist with a playlistId replaces the contents.
+        # We use this as it's the most reliable way to bulk-replace tracks.
+        auth_str = "&".join([f"{k}={v}" for k, v in params.items()])
+        song_str = "&".join([f"songId={sid}" for sid in song_ids])
+        requests.get(f"{URL}/rest/createPlaylist.view?{auth_str}&{song_str}")
     else:
+        # Create a brand new playlist
         params.update({"name": final_name})
-        log(f"Creating new {target_type} -> '{final_name}'")
-    
-    auth_str = "&".join([f"{k}={v}" for k, v in params.items()])
-    # Use max 50 songs
-    song_str = "&".join([f"songId={sid}" for sid in song_ids[:50]])
-    
-    requests.get(f"{URL}/rest/createPlaylist.view?{auth_str}&{song_str}")
-    
-    # Update local state for daylist
-    if target_type == "daylist":
+        log(f"Creating brand new {target_type} -> '{final_name}'")
+        auth_str = "&".join([f"{k}={v}" for k, v in params.items()])
+        song_str = "&".join([f"songId={sid}" for sid in song_ids])
+        
+        resp = requests.get(f"{URL}/rest/createPlaylist.view?{auth_str}&{song_str}")
+        
+        # Find the ID of what we just created to save it
         time.sleep(1)
         refreshed = call_subsonic("getPlaylists").get("playlists", {}).get("playlist", [])
         if not isinstance(refreshed, list): refreshed = [refreshed] if refreshed else []
-        new_id = next((p['id'] for p in refreshed if p.get('name') == final_name), target_id)
-        if new_id:
+        new_id = next((p['id'] for p in refreshed if p.get('name') == final_name), None)
+        
+        if target_type == "daylist" and new_id:
             state["daylist_id"] = new_id
             save_playlist_map(state)
 
