@@ -29,15 +29,17 @@ You are Spotidrome, a professional music curator. You generate personalized musi
 TASK 1: Daily Mix
 - Anchor around 'top_artist_recently'.
 - 50 tracks total (40 recent, 10 discovery).
-- VARIETY RULE: Strictly limit tracks to a maximum of 2 per album. DO NOT add entire albums.
+- STRICT VARIETY RULE: No more than 2 tracks from the same album. I repeat: DO NOT include full albums.
 - Output key: "daily_mix" (list of IDs).
+- Ensure that the playlist is properly shuffled.
 
 TASK 2: daylist
-- Create a hyper-personalized mix based on the user's current 'vibe' and time of day.
-- Naming: Generate a short, hyper-specific, all-lowercase title (e.g. "rainy window espresso" or "neon night drive"). 
-- Selection: Pick 50 tracks that fit this specific generated vibe.
-- VARIETY RULE: Strictly limit tracks to a maximum of 2 per album. This must be a mix of individual songs from different sources, NOT a sequence of album tracks.
+- Create a hyper-personalized mix based on the user's current 'vibe'.
+- Naming: Generate a short, hyper-specific, all-lowercase title (e.g. "rainy window espresso"). 
+- Selection: Pick 50 tracks that fit this specific vibe.
+- VARIETY RULE: Strictly limit tracks to a maximum of 2 per album.
 - Output keys: "daylist_name" (string) and "daylist_ids" (list of IDs).
+- Ensure that the playlist is properly shuffled.
 
 CRITICAL: Return ONLY valid JSON.
 """
@@ -61,18 +63,28 @@ def call_subsonic(endpoint, extra_params={}):
         log(f"API Error ({endpoint}): {e}")
         return {}
 
+# Global in-memory state fallback if file writing fails
+_MEMORY_STATE = {}
+
 def load_playlist_map():
     if os.path.exists(MAP_FILE):
         try:
             with open(MAP_FILE, 'r') as f:
                 return json.load(f)
-        except:
-            return {}
-    return {}
+        except Exception as e:
+            log(f"Could not read map file: {e}")
+    return _MEMORY_STATE
 
 def save_playlist_map(data):
-    with open(MAP_FILE, 'w') as f:
-        json.dump(data, f)
+    global _MEMORY_STATE
+    _MEMORY_STATE.update(data)
+    try:
+        with open(MAP_FILE, 'w') as f:
+            json.dump(data, f)
+    except PermissionError:
+        log("Warning: Permission denied writing to playlist_map.json. Using in-memory state only.")
+    except Exception as e:
+        log(f"Warning: Failed to save map file: {e}")
 
 def fetch_music_data():
     log("Step 1: Analyzing library activity...")
@@ -80,7 +92,6 @@ def fetch_music_data():
     recent_pool = []
     seen_ids = set()
 
-    # Get recent albums
     recent_data = call_subsonic("getAlbumList", {"type": "recent", "size": 60})
     albums = recent_data.get("albumList", {}).get("album", [])
     if not isinstance(albums, list): albums = [albums] if albums else []
@@ -94,17 +105,11 @@ def fetch_music_data():
         for t in tracks:
             if t['id'] not in seen_ids:
                 recent_pool.append({
-                    "id": t['id'], 
-                    "t": t.get('title'), 
-                    "a": t.get('artist'), 
-                    "alb": t.get('album'),
-                    "g": t.get('genre')
+                    "id": t['id'], "t": t.get('title'), "a": t.get('artist'), "alb": t.get('album')
                 })
                 seen_ids.add(t['id'])
 
     top_artist = max(artist_counts, key=artist_counts.get) if artist_counts else "Various"
-    
-    # Discovery pool
     discovery_data = call_subsonic("getRandomSongs", {"size": 150})
     discovery = discovery_data.get("randomSongs", {}).get("song", [])
 
@@ -120,14 +125,14 @@ def get_curated_content(data):
         log("No Gemini Key provided.")
         return None
 
-    log(f"Step 2: Requesting curation from Gemini for '{data['current_time']}'...")
+    log(f"Step 2: Requesting curation for '{data['current_time']}'...")
     client = genai.Client(api_key=GEMINI_KEY)
     
     context = {
         "top_artist_recently": data['top_artist'],
         "time_context": data['current_time'],
-        "recent_pool": data['recent_pool'][:200], # Send more tracks so it has variety to choose from
-        "library_samples": [{"id": s['id'], "t": s.get('title'), "a": s.get('artist'), "alb": s.get('album')} for s in data['discovery'][:100]]
+        "recent_pool": data['recent_pool'][:150],
+        "library_samples": [{"id": s['id'], "t": s.get('title'), "a": s.get('artist')} for s in data['discovery'][:100]]
     }
 
     try:
@@ -146,8 +151,6 @@ def get_curated_content(data):
 
 def update_playlist(target_type, display_name, song_ids):
     if not song_ids: return
-    
-    # Clean duplicates and limit to 50
     song_ids = list(dict.fromkeys(song_ids))[:50]
     
     state = load_playlist_map()
@@ -160,48 +163,38 @@ def update_playlist(target_type, display_name, song_ids):
         target_id = next((p['id'] for p in all_playlists if p.get('name') == "Daily Mix"), None)
         final_name = "Daily Mix"
     else:
-        # Check mapping file first
+        # Search for Daylist: 1. Map file, 2. Existing lowercase playlist
         stored_id = state.get("daylist_id")
-        # Verify the playlist still actually exists in Navidrome
         if stored_id and any(p['id'] == stored_id for p in all_playlists):
             target_id = stored_id
         else:
-            # Fallback: find any playlist with a non-standard name that might be an old daylist
-            # Or just create a new one if we're totally lost
-            target_id = None
+            # Try to find a playlist that looks like a daylist (lowercase name, not Daily Mix)
+            target_id = next((p['id'] for p in all_playlists if p['name'].islower() and "daily" not in p['name'].lower()), None)
         
         final_name = display_name
 
     params = get_auth_params()
     
     if target_id:
-        # Use updatePlaylist to rename and replace content in ONE call
         params.update({"playlistId": target_id, "name": final_name})
         log(f"Updating {target_type} (ID: {target_id}) -> '{final_name}'")
-        
-        # In Subsonic API, createPlaylist with a playlistId replaces the contents.
-        # We use this as it's the most reliable way to bulk-replace tracks.
         auth_str = "&".join([f"{k}={v}" for k, v in params.items()])
         song_str = "&".join([f"songId={sid}" for sid in song_ids])
         requests.get(f"{URL}/rest/createPlaylist.view?{auth_str}&{song_str}")
     else:
-        # Create a brand new playlist
         params.update({"name": final_name})
-        log(f"Creating brand new {target_type} -> '{final_name}'")
+        log(f"Creating new {target_type} -> '{final_name}'")
         auth_str = "&".join([f"{k}={v}" for k, v in params.items()])
         song_str = "&".join([f"songId={sid}" for sid in song_ids])
+        requests.get(f"{URL}/rest/createPlaylist.view?{auth_str}&{song_str}")
         
-        resp = requests.get(f"{URL}/rest/createPlaylist.view?{auth_str}&{song_str}")
-        
-        # Find the ID of what we just created to save it
+        # Save the new ID to prevent future duplicates
         time.sleep(1)
         refreshed = call_subsonic("getPlaylists").get("playlists", {}).get("playlist", [])
         if not isinstance(refreshed, list): refreshed = [refreshed] if refreshed else []
         new_id = next((p['id'] for p in refreshed if p.get('name') == final_name), None)
-        
         if target_type == "daylist" and new_id:
-            state["daylist_id"] = new_id
-            save_playlist_map(state)
+            save_playlist_map({"daylist_id": new_id})
 
 def run_cycle():
     log("--- Starting Curation Cycle ---")
@@ -213,14 +206,12 @@ def run_cycle():
             update_playlist("daily", "Daily Mix", result["daily_mix"])
         if "daylist_name" in result and "daylist_ids" in result:
             update_playlist("daylist", result["daylist_name"], result["daylist_ids"])
-                
     log("--- Curation Cycle Complete ---")
 
 if __name__ == "__main__":
     log("Spotidrome Personalized Curation Service Started")
     run_cycle()
     schedule.every(6).hours.do(run_cycle)
-    
     while True:
         schedule.run_pending()
         time.sleep(60)
