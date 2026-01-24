@@ -34,9 +34,8 @@ TASK 1: Daily Mix
 TASK 2: daylist
 - Create a hyper-personalized mix based on the user's current 'vibe' and time of day.
 - Naming: Generate a hyper-specific, all-lowercase title (NO "daylist" prefix).
-- The title should mash together descriptors, feelings, and the current time/day. 
-- Example titles: "cottagecore goblincore friday evening", "liminal space synthwave monday morning", "core memories sing along friday evening".
 - Selection: Pick 50 tracks that fit this specific generated vibe.
+- VARIETY RULE: Do NOT include more than 2 tracks from the same album. Avoid adding entire albums.
 - Output keys: "daylist_name" (string) and "daylist_ids" (list of IDs).
 
 CRITICAL: Return ONLY valid JSON.
@@ -80,7 +79,7 @@ def fetch_music_data():
     recent_pool = []
     seen_ids = set()
 
-    # Get recent albums for 'vibe' context
+    # Get recent albums
     recent_data = call_subsonic("getAlbumList", {"type": "recent", "size": 60})
     albums = recent_data.get("albumList", {}).get("album", [])
     if not isinstance(albums, list): albums = [albums] if albums else []
@@ -93,7 +92,14 @@ def fetch_music_data():
         if not isinstance(tracks, list): tracks = [tracks] if tracks else []
         for t in tracks:
             if t['id'] not in seen_ids:
-                recent_pool.append(t)
+                # Include album name so AI can see the variety rule
+                recent_pool.append({
+                    "id": t['id'], 
+                    "t": t.get('title'), 
+                    "a": t.get('artist'), 
+                    "alb": t.get('album'),
+                    "g": t.get('genre')
+                })
                 seen_ids.add(t['id'])
 
     top_artist = max(artist_counts, key=artist_counts.get) if artist_counts else "Various"
@@ -106,7 +112,7 @@ def fetch_music_data():
         "top_artist": top_artist,
         "recent_pool": recent_pool,
         "discovery": discovery,
-        "current_time": datetime.now().strftime("%A %p") # e.g. Friday PM
+        "current_time": datetime.now().strftime("%A %p") 
     }
 
 def get_curated_content(data):
@@ -120,8 +126,8 @@ def get_curated_content(data):
     context = {
         "top_artist_recently": data['top_artist'],
         "time_context": data['current_time'],
-        "recent_pool": [{"id": s['id'], "t": s.get('title'), "a": s.get('artist'), "g": s.get('genre')} for s in data['recent_pool'][:150]],
-        "library_samples": [{"id": s['id'], "t": s.get('title'), "a": s.get('artist'), "g": s.get('genre')} for s in data['discovery'][:100]]
+        "recent_pool": data['recent_pool'][:150],
+        "library_samples": [{"id": s['id'], "t": s.get('title'), "a": s.get('artist'), "alb": s.get('album')} for s in data['discovery'][:100]]
     }
 
     try:
@@ -141,7 +147,9 @@ def get_curated_content(data):
 def update_playlist(target_type, display_name, song_ids):
     if not song_ids: return
     
-    # Load state to find the daylist ID
+    # Clean duplicates from the AI response just in case
+    song_ids = list(dict.fromkeys(song_ids))
+    
     state = load_playlist_map()
     all_playlists = call_subsonic("getPlaylists").get("playlists", {}).get("playlist", [])
     if not isinstance(all_playlists, list): all_playlists = [all_playlists] if all_playlists else []
@@ -152,36 +160,39 @@ def update_playlist(target_type, display_name, song_ids):
         target_id = next((p['id'] for p in all_playlists if p.get('name') == "Daily Mix"), None)
         final_name = "Daily Mix"
     else:
-        # Check if we already have a daylist ID tracked
+        # 1. Try mapping file
         target_id = state.get("daylist_id")
-        # Safety check: does it still exist in Navidrome?
-        if target_id and not any(p['id'] == target_id for p in all_playlists):
-            target_id = None
+        
+        # 2. Safety: If mapping is lost, look for any playlist that ISN'T "Daily Mix" but was owned by us
+        # Since daylist names are random, we look for our stored ID first
+        exists = any(p['id'] == target_id for p in all_playlists) if target_id else False
+        
+        if not exists:
+            target_id = None # Force creation if ID is invalid
+
         final_name = display_name
 
     params = get_auth_params()
     
     if target_id:
-        # UPDATE EXISTING (Subsonic's createPlaylist with a playlistId renames and replaces)
         params.update({"playlistId": target_id, "name": final_name})
-        log(f"Updating {target_type} (ID: {target_id}) to '{final_name}'")
+        log(f"Updating {target_type} (ID: {target_id}) -> '{final_name}'")
     else:
-        # CREATE NEW
         params.update({"name": final_name})
-        log(f"Creating new {target_type} named '{final_name}'")
+        log(f"Creating new {target_type} -> '{final_name}'")
     
     auth_str = "&".join([f"{k}={v}" for k, v in params.items()])
+    # Use max 50 songs
     song_str = "&".join([f"songId={sid}" for sid in song_ids[:50]])
     
-    # Execute the update/create
     requests.get(f"{URL}/rest/createPlaylist.view?{auth_str}&{song_str}")
     
-    # If we created a new daylist, find its ID and save it so we can rename it later
-    if target_type == "daylist" and not target_id:
-        time.sleep(1) # Give server a moment to index
-        refreshed_lists = call_subsonic("getPlaylists").get("playlists", {}).get("playlist", [])
-        if not isinstance(refreshed_lists, list): refreshed_lists = [refreshed_lists] if refreshed_lists else []
-        new_id = next((p['id'] for p in refreshed_lists if p.get('name') == final_name), None)
+    # Update local state for daylist
+    if target_type == "daylist":
+        time.sleep(1)
+        refreshed = call_subsonic("getPlaylists").get("playlists", {}).get("playlist", [])
+        if not isinstance(refreshed, list): refreshed = [refreshed] if refreshed else []
+        new_id = next((p['id'] for p in refreshed if p.get('name') == final_name), target_id)
         if new_id:
             state["daylist_id"] = new_id
             save_playlist_map(state)
@@ -192,11 +203,8 @@ def run_cycle():
     result = get_curated_content(data)
     
     if result:
-        # Handle Daily Mix
         if "daily_mix" in result:
             update_playlist("daily", "Daily Mix", result["daily_mix"])
-            
-        # Handle daylist (lowercase name)
         if "daylist_name" in result and "daylist_ids" in result:
             update_playlist("daylist", result["daylist_name"], result["daylist_ids"])
                 
@@ -205,11 +213,8 @@ def run_cycle():
 if __name__ == "__main__":
     log("Spotidrome Personalized Curation Service Started")
     run_cycle()
-    
-    # Run every 6 hours (Morning, Afternoon, Evening, Night)
     schedule.every(6).hours.do(run_cycle)
     
     while True:
         schedule.run_pending()
         time.sleep(60)
-
