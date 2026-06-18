@@ -18,7 +18,7 @@ URL = os.getenv("NAVIDROME_URL")
 USER = os.getenv("NAVIDROME_USER")
 PASS = os.getenv("NAVIDROME_PASS")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-preview-09-2025")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
 
 SYSTEM_INSTRUCTION = """
 You are Spotidrome, a professional music curator. Generate a 'Daily Mix' JSON.
