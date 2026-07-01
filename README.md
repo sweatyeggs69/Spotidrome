@@ -4,9 +4,6 @@
 
 Spotidrome is a playlist generator for Navidrome (and other Subsonic-compatible servers), with optional Google Gemini integration. It analyzes your listening history, favorites and library to curate a "Daily Mix" playlist that is automatically updated every day at midnight.
 
-> [!NOTE]
-> This was created using Gemini; solely because I am not a developer, but I have looked over the changes made each time to ensure accuracy.
-
 ## Prerequisites
 
 - A Navidrome server instance.
